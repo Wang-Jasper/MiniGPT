@@ -3,7 +3,7 @@
 __pycache__/
 *.py[cod]
 
-data/
-checkpoints/
-logs/
-outputs/
+/data/
+/checkpoints/
+/logs/
+/outputs/
