@@ -51,6 +51,6 @@ class FeedForward(nn.Module):
                 nn.Linear(4 * config["embedding_dim"], config["embedding_dim"]),
         )
 
-        def forward(self, x):
-            return self.layers(x)
+    def forward(self, x):
+        return self.layers(x)
 

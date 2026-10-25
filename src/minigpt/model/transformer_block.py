@@ -13,11 +13,12 @@ class TransformerBlock(nn.Module):
             qkv_dim=config["embedding_dim"] // config["head_num"],
             embedding_dim=config["embedding_dim"],
             context_size=config["context_size"],
+            drop_rate=config["drop_rate"],
         )
         self.feed_forward = FeedForward(config)
         self.norm_attention = LayerNorm(config["embedding_dim"])
         self.norm_feed_forward = LayerNorm(config["embedding_dim"])
-        self.drop_residual = nn.Dropout(config["drop_rate"])
+        self.dropout_residual = nn.Dropout(config["drop_rate"])
 
     def forward(self, x):
         # Residual Connection: y = x + F(x)
@@ -29,14 +30,14 @@ class TransformerBlock(nn.Module):
         residual = x
         x = self.norm_attention(x)
         x = self.attention(x)
-        x = x.dropout(x)
+        x = self.dropout_residual(x)
         x = x + residual
 
         # residual for feed forward network
         residual = x
         x = self.norm_feed_forward(x)
         x = self.feed_forward(x)
-        x = self.drop_residual(x)
+        x = self.dropout_residual(x)
         x = x + residual
 
         return x
