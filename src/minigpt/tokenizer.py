@@ -26,11 +26,11 @@ class GPTDataset(Dataset):
     def __getitem__(self, idx):
         return self.input_ids[idx], self.target_ids[idx]
 
-def createDataLoader(txt, batch_size=4, sample_Lenth=512,
+def createDataLoader(txt, batch_size=4, seq_Lenth=1024,
                      stride=256, shuffle=True, drop_last=True,
                      num_workers=0):
     tokenizer = tiktoken.get_encoding("gpt2")
-    dataset = GPTDataset(tokenizer, txt, sample_Lenth, stride)
+    dataset = GPTDataset(tokenizer, txt, seq_Lenth, stride)
 
     dataloader = DataLoader(
         dataset,
