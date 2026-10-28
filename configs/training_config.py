@@ -18,7 +18,7 @@ TRAINING_CONFIG = {
     "generation_prompt": "First Citizen:",  # Text to continue after each epoch.
     "generation_max_new_tokens": 1024,       # New tokens per sample; 0 disables samples.
     "generation_temperature": 0.5,         # Sampling temperature; 0 uses greedy decoding.
-    "generation_top_k": 50,                # Candidate tokens; None keeps all tokens.
+    "generation_top_k": None,                # Candidate tokens; None keeps all tokens.
     "generation_eos_id": None,             # End token ID; None disables early stopping.
     "output_directory": "outputs",         # Root directory for plots and training results.
     "checkpoint_directory": "checkpoints", # Root directory for model checkpoints.

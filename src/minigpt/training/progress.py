@@ -222,6 +222,24 @@ def show_training_setup(device, train_batches, val_batches, log_path):
     show_stage(f"Progress log: {log_path}")
 
 
+def show_pretrained_setup(model_name, context_size, seq_length):
+    """Display pretrained initialization and the independent training length."""
+    show_stage(f"Pretrained weights: {model_name}")
+    show_stage(f"Model context limit: {context_size} | Training sequence length: {seq_length}")
+    show_stage("Starting at epoch 1 with a new optimizer.")
+
+
+def show_resume_setup(checkpoint_path, completed_epochs, target_epochs, global_step, tokens_seen):
+    """Display the restored epoch boundary, progress, and cumulative target."""
+    show_stage(f"Resume checkpoint: {checkpoint_path}")
+    show_stage(f"Completed epochs: {completed_epochs} | Target epochs: {target_epochs}")
+    show_stage(f"Restored progress: Step {global_step} | Tokens seen {tokens_seen}")
+    if completed_epochs >= target_epochs:
+        show_stage("The target epoch count is already reached. No training is needed.")
+    else:
+        show_stage(f"Resuming at epoch {completed_epochs + 1}/{target_epochs} with the restored optimizer.")
+
+
 def show_sample(epoch, text):
     """Display the text generated after a training epoch."""
     show_stage(f"Sample after epoch {epoch}:\n{text}")

@@ -3,6 +3,8 @@
 import json
 import math
 from pathlib import Path
+import pickle
+import warnings
 
 import torch
 from matplotlib.backends.backend_agg import FigureCanvasAgg
@@ -41,6 +43,7 @@ def save_checkpoint(
         "training_config": dict(training_config),
         "history": history,
         "rng_state": torch.get_rng_state(),
+        "rng_device": str(next(model.parameters()).device),
         **{name: value for name, value in progress.items() if value is not None},
     }
     if torch.cuda.is_initialized():
@@ -212,3 +215,141 @@ def load_checkpoint(checkpoint_path, device="cpu", load_optimizer=False):
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
 
     return model, optimizer, checkpoint
+
+
+def _validate_training_checkpoint(checkpoint):
+    """Require explicit epoch-boundary progress rather than guessing from names."""
+    if not isinstance(checkpoint, dict):
+        raise ValueError("Cannot resume training: the checkpoint must contain a dictionary.")
+    required = (
+        "model_state_dict", "optimizer_state_dict", "model_config", "training_config",
+        "history", "completed_epochs", "global_step", "tokens_seen",
+    )
+    missing = [name for name in required if name not in checkpoint]
+    if missing:
+        raise ValueError(
+            "Cannot resume training: checkpoint is missing " + ", ".join(missing)
+            + ". Older checkpoints may still be used for inference."
+        )
+    for name in ("model_state_dict", "optimizer_state_dict", "model_config", "training_config", "history"):
+        if not isinstance(checkpoint[name], dict):
+            raise ValueError(f"Cannot resume training: {name} must be a dictionary.")
+    for name in ("completed_epochs", "global_step", "tokens_seen"):
+        value = checkpoint[name]
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(f"Cannot resume training: {name} must be a nonnegative integer.")
+
+    history = checkpoint["history"]
+    names = ("train_losses", "validation_losses", "tokens_seen_history")
+    for name in names:
+        if name not in history or not isinstance(history[name], list):
+            raise ValueError(f"Cannot resume training: history.{name} must be a list.")
+    if len({len(history[name]) for name in names}) != 1:
+        raise ValueError("Cannot resume training: loss and token histories must have matching lengths.")
+    token_history = history["tokens_seen_history"]
+    if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in token_history):
+        raise ValueError("Cannot resume training: token history must contain nonnegative integers.")
+    if any(left > right for left, right in zip(token_history, token_history[1:])):
+        raise ValueError("Cannot resume training: token history must not decrease.")
+    if (token_history[-1] if token_history else 0) != checkpoint["tokens_seen"]:
+        raise ValueError("Cannot resume training: the final token history entry does not match tokens_seen.")
+    for name in ("learning_rate", "weight_decay"):
+        if name not in checkpoint["training_config"]:
+            raise ValueError(f"Cannot resume training: training_config is missing {name}.")
+
+
+def read_training_checkpoint(checkpoint_path):
+    """Read a resume checkpoint on CPU and validate its explicit training progress."""
+    try:
+        checkpoint = torch.load(
+            Path(checkpoint_path).expanduser(), map_location="cpu", weights_only=True
+        )
+    except (RuntimeError, EOFError, pickle.UnpicklingError) as error:
+        raise ValueError(f"Cannot read the training checkpoint: {error}") from error
+    _validate_training_checkpoint(checkpoint)
+    return checkpoint
+
+
+def restore_training_checkpoint(checkpoint, device="cpu"):
+    """Restore model and AdamW on the target device without restoring RNG yet.
+
+    Model parameters must reach their final device before the optimizer is
+    created. AdamW's state loader then places its tensors using each parameter's
+    device policy, including the CPU step counters used by ordinary AdamW.
+    """
+    _validate_training_checkpoint(checkpoint)
+    try:
+        device = torch.device(device)
+        model = MiniGPT(checkpoint["model_config"]).to(device)
+        model.load_state_dict(checkpoint["model_state_dict"], strict=True)
+        settings = checkpoint["training_config"]
+        optimizer = torch.optim.AdamW(
+            model.parameters(), lr=settings["learning_rate"], weight_decay=settings["weight_decay"]
+        )
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    except (KeyError, TypeError, ValueError, RuntimeError) as error:
+        raise ValueError(f"Cannot restore the training model and optimizer: {error}") from error
+    model.train()
+    return model, optimizer
+
+
+def restore_training_rng(checkpoint, device="cpu"):
+    """Restore RNG after all initialization, touching only the training CUDA device.
+
+    Missing state or a device change permits continuation but cannot guarantee
+    the same random sequence as an uninterrupted run.
+    """
+    device = torch.device(device)
+    cpu_state = checkpoint.get("rng_state")
+    if cpu_state is None:
+        warnings.warn("Checkpoint has no CPU RNG state; exact replay is unavailable.", RuntimeWarning, stacklevel=2)
+    else:
+        if not isinstance(cpu_state, torch.Tensor) or cpu_state.dtype != torch.uint8 or cpu_state.ndim != 1:
+            raise ValueError("Checkpoint rng_state must be a one-dimensional uint8 tensor.")
+        try:
+            torch.set_rng_state(cpu_state.cpu())
+        except RuntimeError as error:
+            raise ValueError(f"Cannot restore CPU RNG state: {error}") from error
+
+    saved_device = checkpoint.get("rng_device")
+    if saved_device is not None:
+        try:
+            saved_device = torch.device(saved_device)
+        except (TypeError, RuntimeError) as error:
+            raise ValueError("Checkpoint rng_device is invalid.") from error
+    if device.type != "cuda":
+        if saved_device is not None and saved_device.type != device.type:
+            warnings.warn("Training device changed; exact replay is unavailable.", RuntimeWarning, stacklevel=2)
+        return
+    if not torch.cuda.is_available():
+        raise ValueError("CUDA is unavailable; cannot restore CUDA RNG state.")
+    states = checkpoint.get("cuda_rng_states")
+    if not isinstance(states, (list, tuple)) or not states:
+        warnings.warn("Checkpoint has no CUDA RNG state; exact replay is unavailable.", RuntimeWarning, stacklevel=2)
+        return
+    target_index = torch.cuda.current_device() if device.index is None else device.index
+    if saved_device is not None:
+        if saved_device.type != "cuda":
+            warnings.warn("Checkpoint was saved on a different device type; CUDA RNG cannot be restored.", RuntimeWarning, stacklevel=2)
+            return
+        source_index = 0 if saved_device.index is None else saved_device.index
+    elif len(states) == 1:
+        source_index = 0
+    elif target_index < len(states):
+        source_index = target_index
+        warnings.warn("Checkpoint does not record its training GPU; assuming the matching CUDA index.", RuntimeWarning, stacklevel=2)
+    else:
+        warnings.warn("Saved CUDA RNG states cannot be mapped to this GPU; exact replay is unavailable.", RuntimeWarning, stacklevel=2)
+        return
+    if source_index >= len(states):
+        warnings.warn("Checkpoint lacks RNG state for its training GPU; exact replay is unavailable.", RuntimeWarning, stacklevel=2)
+        return
+    state = states[source_index]
+    if not isinstance(state, torch.Tensor) or state.dtype != torch.uint8 or state.ndim != 1:
+        raise ValueError("Saved CUDA RNG state must be a one-dimensional uint8 tensor.")
+    if source_index != target_index or len(states) != torch.cuda.device_count():
+        warnings.warn("CUDA device mapping changed; exact replay is unavailable.", RuntimeWarning, stacklevel=2)
+    try:
+        torch.cuda.set_rng_state(state.cpu(), device=target_index)
+    except RuntimeError as error:
+        raise ValueError(f"Cannot restore CUDA RNG state: {error}") from error
