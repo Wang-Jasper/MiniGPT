@@ -14,6 +14,8 @@ class TransformerBlock(nn.Module):
             embedding_dim=config["embedding_dim"],
             context_size=config["context_size"],
             drop_rate=config["drop_rate"],
+            qkv_bias=config.get("qkv_bias", False),
+            output_proj_bias=config.get("output_proj_bias", False),
         )
         self.feed_forward = FeedForward(config)
         self.norm_attention = LayerNorm(config["embedding_dim"])

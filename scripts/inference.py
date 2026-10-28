@@ -8,6 +8,7 @@ import tiktoken
 import torch
 
 from src.minigpt.inference.generate import generate_text
+from src.minigpt.model.pretrained import load_pretrained_gpt2
 from src.minigpt.training.progress import ProgressBar, show_stage
 from src.minigpt.training.results import load_checkpoint
 
@@ -62,8 +63,13 @@ def run_terminal(model, tokenizer, generation_settings):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Continue text with a trained MiniGPT.")
-    parser.add_argument("--checkpoint", help="Checkpoint path; defaults to the newest run.")
+    parser = argparse.ArgumentParser(description="Continue text with MiniGPT or GPT-2 pretrained weights.")
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--checkpoint", help="Checkpoint path; defaults to the newest run.")
+    source.add_argument("--pretrained", help="GPT-2 model name or a local Hugging Face model directory.")
+    parser.add_argument("--context-size", type=int, help="Pretrained model context limit; defaults to its full capacity.")
+    parser.add_argument("--cache-dir", help="Hugging Face model cache directory; requires --pretrained.")
+    parser.add_argument("--local-files-only", action="store_true", help="Load pretrained model files without downloading.")
     parser.add_argument("--device", default="auto", help="auto, cpu, cuda, or cuda:0.")
     parser.add_argument("--max-new-tokens", type=int, help="Number of new tokens to generate.")
     parser.add_argument("--temperature", type=float, help="Sampling temperature; 0 uses greedy.")
@@ -78,28 +84,45 @@ def main(argv=None):
         parser.error("--temperature must be finite and nonnegative.")
     if args.top_k is not None and args.top_k < 0:
         parser.error("--top-k must be nonnegative.")
+    if args.context_size is not None and args.context_size < 1:
+        parser.error("--context-size must be positive.")
+    if args.pretrained is None and (
+        args.context_size is not None or args.cache_dir is not None or args.local_files_only
+    ):
+        parser.error("--context-size, --cache-dir, and --local-files-only require --pretrained.")
 
     try:
-        checkpoint_path = find_checkpoint(args.checkpoint)
         device_name = args.device
         if device_name == "auto":
             device_name = "cuda" if torch.cuda.is_available() else "cpu"
         device = torch.device(device_name)
         if device.type == "cuda" and not torch.cuda.is_available():
             raise ValueError("CUDA is unavailable. Use --device cpu.")
-    except (FileNotFoundError, ValueError, RuntimeError) as error:
-        parser.error(str(error))
 
-    show_stage(f"Loading checkpoint: {checkpoint_path}")
-    # Read on CPU so saved AdamW tensors are never copied to GPU for inference.
-    model, _, checkpoint = load_checkpoint(
-        checkpoint_path, device="cpu", load_optimizer=False
-    )
-    settings = dict(checkpoint.get("training_config", {}))
-    del checkpoint
-    model.to(device)
-    model.eval()
-    tokenizer = tiktoken.get_encoding("gpt2")
+        if args.pretrained is not None:
+            show_stage(f"Loading pretrained model: {args.pretrained}")
+            model, _ = load_pretrained_gpt2(
+                args.pretrained,
+                context_size=args.context_size,
+                device="cpu",
+                cache_dir=args.cache_dir,
+                local_files_only=args.local_files_only,
+            )
+            settings = {"generation_eos_id": 50256}
+        else:
+            checkpoint_path = find_checkpoint(args.checkpoint)
+            show_stage(f"Loading checkpoint: {checkpoint_path}")
+            # Read on CPU so saved AdamW tensors are never copied to GPU for inference.
+            model, _, checkpoint = load_checkpoint(
+                checkpoint_path, device="cpu", load_optimizer=False
+            )
+            settings = dict(checkpoint.get("training_config", {}))
+            del checkpoint
+        model.to(device)
+        model.eval()
+        tokenizer = tiktoken.get_encoding("gpt2")
+    except (ImportError, OSError, ValueError, RuntimeError) as error:
+        parser.error(str(error))
 
     generation_settings = {
         "max_new_tokens": (

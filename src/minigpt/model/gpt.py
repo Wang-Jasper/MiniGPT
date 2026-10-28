@@ -22,6 +22,8 @@ class MiniGPT(nn.Module):
         self.output_head = nn.Linear(
             config["embedding_dim"], config["vocab_size"], bias=False
         )
+        if config.get("tie_embeddings", False):
+            self.output_head.weight = self.token_embedding.weight
 
     def forward(self, x_embedding_idx):
         batch_size, seq_len = x_embedding_idx.shape

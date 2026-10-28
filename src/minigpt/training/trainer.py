@@ -23,7 +23,7 @@ from .progress import (
     show_training_setup,
     training_progress,
 )
-from .results import save_training_results
+from .results import save_periodic_checkpoint, save_training_results
 
 def forward_model(input_batch, model, device):
     """Run token IDs through the model and return logits, retaining gradients"""
@@ -95,6 +95,17 @@ def evaluate_model(model, train_loader, val_loader, device, num_batches=None):
         model.train(was_training)
 
 
+def _validate_checkpoint_settings(every_n_epochs, keep_last):
+    if (
+        not isinstance(every_n_epochs, int)
+        or isinstance(every_n_epochs, bool)
+        or every_n_epochs < 0
+    ):
+        raise ValueError("checkpoint_every_n_epochs must be a nonnegative integer.")
+    if not isinstance(keep_last, int) or isinstance(keep_last, bool) or keep_last < 1:
+        raise ValueError("checkpoint_keep_last must be a positive integer.")
+
+
 def train_model(
     model,
     train_loader,
@@ -111,6 +122,11 @@ def train_model(
     generation_temperature=0.8,
     generation_top_k=50,
     generation_eos_id=None,
+    checkpoint_every_n_epochs=0,
+    checkpoint_keep_last=2,
+    checkpoint_directory=None,
+    model_config=None,
+    training_config=None,
 ):
     """Train the model and return loss histories and processed-token counts.
 
@@ -121,7 +137,17 @@ def train_model(
     generation_temperature - Sampling temperature; 0 uses greedy decoding.
     generation_top_k - Number of candidate tokens; None keeps all.
     generation_eos_id - End token ID, or None to disable early stopping.
+    checkpoint_every_n_epochs - Save after each N completed epochs; 0 disables it.
+    checkpoint_keep_last - Number of periodic snapshots retained in this run.
+    checkpoint_directory - Directory dedicated to this run's checkpoints.
+    model_config, training_config - Required metadata when periodic saving is enabled.
     """
+    _validate_checkpoint_settings(checkpoint_every_n_epochs, checkpoint_keep_last)
+    if checkpoint_every_n_epochs > 0 and (
+        checkpoint_directory is None or model_config is None or training_config is None
+    ):
+        raise ValueError("Periodic checkpoints require checkpoint_directory, model_config, and training_config.")
+
     train_losses = []
     validation_losses = []
     tokens_seen_history = []
@@ -187,6 +213,23 @@ def train_model(
                         progress, log_path=log_path, progress_bar=epoch_progress
                     )
 
+        completed_epochs = epoch + 1
+        if checkpoint_every_n_epochs > 0 and completed_epochs % checkpoint_every_n_epochs == 0:
+            checkpoint_path = save_periodic_checkpoint(
+                model, optimizer, model_config, training_config,
+                history={
+                    "train_losses": train_losses,
+                    "validation_losses": validation_losses,
+                    "tokens_seen_history": tokens_seen_history,
+                },
+                checkpoint_directory=checkpoint_directory,
+                completed_epochs=completed_epochs,
+                global_step=global_step,
+                tokens_seen=tokens_seen,
+                keep_last=checkpoint_keep_last,
+            )
+            show_stage(f"Periodic checkpoint saved: {checkpoint_path}")
+
         if tokenizer is not None and generation_max_new_tokens > 0:
             with generation_progress(epoch + 1, generation_max_new_tokens) as sample_progress:
                 sample = generate_text(
@@ -207,6 +250,20 @@ def train_model(
 def main():
     gpt_config = GPT_CONFIG_124M
     settings = TRAINING_CONFIG
+    seq_length = settings.get("seq_length", gpt_config["context_size"])
+    if (
+        not isinstance(seq_length, int)
+        or isinstance(seq_length, bool)
+        or not 1 <= seq_length <= gpt_config["context_size"]
+    ):
+        raise ValueError("seq_length must be a positive integer not exceeding context_size.")
+    stride = settings.get("stride", max(1, seq_length // 2))
+    if not isinstance(stride, int) or isinstance(stride, bool) or stride < 1:
+        raise ValueError("stride must be a positive integer.")
+    checkpoint_every_n_epochs = settings.get("checkpoint_every_n_epochs", 0)
+    checkpoint_keep_last = settings.get("checkpoint_keep_last", 2)
+    _validate_checkpoint_settings(checkpoint_every_n_epochs, checkpoint_keep_last)
+
     torch.manual_seed(settings["random_seed"])
     device_name = settings["device"]
     if device_name == "auto":
@@ -236,8 +293,8 @@ def main():
     train_loader = createDataLoader(
         text_data[:split_idx],
         batch_size=settings["batch_size"],
-        seq_Lenth=gpt_config["context_size"],
-        stride=gpt_config["context_size"] // 2,
+        seq_Lenth=seq_length,
+        stride=stride,
         drop_last=True,
         shuffle=True,
         num_workers=settings["num_workers"],
@@ -245,8 +302,8 @@ def main():
     val_loader = createDataLoader(
         text_data[split_idx:],
         batch_size=settings["batch_size"],
-        seq_Lenth=gpt_config["context_size"],
-        stride=gpt_config["context_size"],
+        seq_Lenth=seq_length,
+        stride=seq_length,
         drop_last=False,
         shuffle=False,
         num_workers=settings["num_workers"],
@@ -255,7 +312,13 @@ def main():
     project_root = Path(__file__).resolve().parents[3]
     run_name = f"training_{uuid4().hex}"
     log_path = project_root / "logs" / f"{run_name}.csv"
+    checkpoint_directory = project_root / settings["checkpoint_directory"] / run_name
     show_training_setup(device, len(train_loader), len(val_loader), log_path)
+    if checkpoint_every_n_epochs > 0:
+        show_stage(
+            f"Periodic checkpoints: every {checkpoint_every_n_epochs} epochs, "
+            f"keep {checkpoint_keep_last} | {checkpoint_directory}"
+        )
 
     tokenizer = tiktoken.get_encoding("gpt2")
     show_stage("Starting training...")
@@ -275,6 +338,11 @@ def main():
         generation_temperature=settings["generation_temperature"],
         generation_top_k=settings["generation_top_k"],
         generation_eos_id=settings["generation_eos_id"],
+        checkpoint_every_n_epochs=checkpoint_every_n_epochs,
+        checkpoint_keep_last=checkpoint_keep_last,
+        checkpoint_directory=checkpoint_directory,
+        model_config=gpt_config,
+        training_config=settings,
     )
 
     show_stage("Saving results...")
@@ -289,8 +357,11 @@ def main():
             "tokens_seen_history": tokens_seen_history,
         },
         output_directory=project_root / settings["output_directory"] / run_name,
-        checkpoint_directory=project_root / settings["checkpoint_directory"] / run_name,
+        checkpoint_directory=checkpoint_directory,
         log_path=log_path,
+        completed_epochs=settings["num_epochs"],
+        global_step=settings["num_epochs"] * len(train_loader),
+        tokens_seen=tokens_seen_history[-1] if tokens_seen_history else 0,
     )
     show_results(artifacts)
     return train_losses, validation_losses, tokens_seen_history, model
@@ -301,6 +372,7 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         show_interruption()
+        show_stage("Completed periodic checkpoints, if any, were kept.")
         raise SystemExit(130) from None
 
 

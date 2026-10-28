@@ -235,6 +235,8 @@ def show_results(artifacts):
 
 
 def show_interruption():
-    """Explain what remains after a user interrupts training."""
+    """Distinguish saved epoch snapshots from unsaved work and final artifacts."""
     show_stage("Training interrupted. Existing CSV records were kept.")
-    show_stage("A final checkpoint is saved only after training finishes.")
+    show_stage("Periodic checkpoints, if any, contain progress only up to their saved epoch.")
+    show_stage("This interruption does not create a new checkpoint.")
+    show_stage("The final checkpoint.pth and training reports are written after normal completion.")

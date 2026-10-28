@@ -207,17 +207,20 @@ class CausalAttention(nn.Module):
         return output
 
 class MutiHeadAttention(nn.Module):
-    def __init__(self, head_num, qkv_dim, embedding_dim, context_size, drop_rate=0.1):
+    def __init__(
+        self, head_num, qkv_dim, embedding_dim, context_size, drop_rate=0.1,
+        qkv_bias=False, output_proj_bias=False,
+    ):
         super(MutiHeadAttention, self).__init__()
         self.qkv_dim = qkv_dim
         self.head_num = head_num
         total_qkv_dim = qkv_dim * head_num
 
-        self.W_query = nn.Linear(embedding_dim, total_qkv_dim, bias=False)
-        self.W_key = nn.Linear(embedding_dim, total_qkv_dim, bias=False)
-        self.W_value = nn.Linear(embedding_dim, total_qkv_dim, bias=False)
+        self.W_query = nn.Linear(embedding_dim, total_qkv_dim, bias=qkv_bias)
+        self.W_key = nn.Linear(embedding_dim, total_qkv_dim, bias=qkv_bias)
+        self.W_value = nn.Linear(embedding_dim, total_qkv_dim, bias=qkv_bias)
 
-        self.output_proj = nn.Linear(total_qkv_dim, embedding_dim, bias=False)
+        self.output_proj = nn.Linear(total_qkv_dim, embedding_dim, bias=output_proj_bias)
 
         self.dropout = nn.Dropout(drop_rate)
         self.register_buffer('mask', torch.triu(
