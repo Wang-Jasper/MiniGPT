@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 
+# for study purpose only, not in trainning
 class Embedding(nn.Module):
     def __init__(self, vocab_size, embedding_dim, context_size):
         super().__init__()

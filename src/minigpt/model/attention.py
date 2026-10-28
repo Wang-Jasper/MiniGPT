@@ -167,13 +167,10 @@ MutiHeadAttention:
 
 """
 
-import math
-
 import torch
 from torch import nn
 
-torch.manual_seed(123)
-
+# for study purpose only, not in trainning
 class CausalAttention(nn.Module):
     def __init__(self, qkv_dim, embedding_dim, context_size):
         super(CausalAttention, self).__init__()
