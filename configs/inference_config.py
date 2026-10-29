@@ -7,7 +7,7 @@ INFERENCE_CONFIG = {
     "checkpoint_path": None,      # In checkpoint mode, None selects the newest final checkpoint.
     "device": "auto",             # auto, cpu, cuda, or cuda:0.
     "context_size": 1024,         # Pretrained capacity; None preserves the source model's limit.
-    "cache_dir": r"E:\MiniGPT\checkpoints\huggingface",            # None keeps the existing Hugging Face cache location.
+    "cache_dir": None,           # None uses the default Hugging Face cache location.
     "local_files_only": True,    # Only controls Hugging Face model file downloads.
     "generation_max_new_tokens": 128,  # Stop at EOS or this token limit, whichever comes first.
     "generation_temperature": 0.5,

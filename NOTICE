@@ -1,0 +1,17 @@
+MiniGPT
+Copyright 2026 Jasper Wang
+
+This project includes implementations and adaptations based on examples from:
+
+Build a Large Language Model (From Scratch)
+by Sebastian Raschka
+https://github.com/rasbt/LLMs-from-scratch
+Copyright 2023-2026 Sebastian Raschka
+
+The examples have been reorganized and modified for MiniGPT, including module
+names, configuration, checkpointing, GPT-2 weight conversion, and terminal
+inference. The upstream license is preserved in:
+licenses/LLMs-from-scratch-LICENSE.txt
+
+External libraries, pretrained model weights, and downloaded datasets retain
+their respective licenses.
